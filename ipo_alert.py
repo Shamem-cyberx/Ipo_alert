@@ -1,61 +1,86 @@
-import requests
+"""
+Daily U.S. IPO Alert – fetches IPOs from Finnhub and emails qualifying tickers (> $200M offer).
+
+Run daily (e.g. 9 AM Dubai time) via Task Scheduler (Windows) or cron (Linux/Mac).
+No cloud automation needed – free and self-hosted.
+"""
 import datetime
+
+import pytz
+import requests
 import smtplib
 from email.mime.text import MIMEText
-import pytz  # For time zone handling
 
-# Configuration - Replace with your details
-API_KEY = 'd6097v1r01qihi8oudvgd6097v1r01qihi8oue00'  # Your Finnhub API key
-EMAIL_SENDER = 'shamem0801@gmail.com'  # e.g., your Gmail address
-EMAIL_PASSWORD = 'wmlm nzfj awhn reul'  # Gmail app password (not regular password)
-EMAIL_RECIPIENT = 'shamem0801@gmail.com'  # Your email to receive alerts
-SMTP_SERVER = 'smtp.gmail.com'  # For Gmail; change for other providers like Outlook
-SMTP_PORT = 587
+from config import (
+    API_KEY,
+    EMAIL_PASSWORD,
+    EMAIL_RECIPIENT,
+    EMAIL_SENDER,
+    MIN_OFFER_VALUE_USD,
+    SEND_WHEN_EMPTY,
+    SMTP_PORT,
+    SMTP_SERVER,
+    US_EXCHANGES,
+)
 
-# U.S. exchanges to filter (case-insensitive match)
-US_EXCHANGES = ['nasdaq', 'nyse', 'amex']
 
 def get_today_dubai():
     """Get today's date in YYYY-MM-DD format based on Dubai time zone (UTC+4)."""
-    dubai_tz = pytz.timezone('Asia/Dubai')
-    today = datetime.datetime.now(dubai_tz).strftime('%Y-%m-%d')
-    return today
+    dubai_tz = pytz.timezone("Asia/Dubai")
+    return datetime.datetime.now(dubai_tz).strftime("%Y-%m-%d")
+
 
 def fetch_ipos(today):
     """Fetch IPO calendar data for today from Finnhub API."""
-    url = f'https://finnhub.io/api/v1/calendar/ipo?from={today}&to={today}&token={API_KEY}'
+    url = f"https://finnhub.io/api/v1/calendar/ipo?from={today}&to={today}&token={API_KEY}"
     response = requests.get(url)
     if response.status_code == 200:
         data = response.json()
-        return data.get('ipoCalendar', [])
-    else:
-        print(f"API error: {response.status_code} - {response.text}")
-        return []
+        return data.get("ipoCalendar", [])
+    print(f"API error: {response.status_code} - {response.text}")
+    return []
+
 
 def filter_qualifying_ipos(ipos):
-    """Filter U.S. IPOs with totalSharesValue > $200 million."""
-    qualifying_tickers = []
+    """Filter U.S. IPOs with totalSharesValue above configured minimum."""
+    qualifying = []
     for ipo in ipos:
-        exchange_lower = ipo.get('exchange', '').lower()
-        if any(us_ex in exchange_lower for us_ex in US_EXCHANGES):
-            total_value = ipo.get('totalSharesValue', 0)
-            if total_value > 200000000:  # > $200M USD
-                ticker = ipo.get('symbol', 'Unknown')
-                qualifying_tickers.append(ticker)
-    return qualifying_tickers
+        exchange = ipo.get("exchange", "").lower()
+        if any(ex in exchange for ex in US_EXCHANGES):
+            if ipo.get("totalSharesValue", 0) > MIN_OFFER_VALUE_USD:
+                qualifying.append(ipo.get("symbol", "Unknown"))
+    return qualifying
 
-def send_email(tickers):
-    """Send email ONLY if there are qualifying tickers."""
-    if not tickers:
+
+def _build_email_body(tickers, today):
+    """Build a neat, formatted email body."""
+    min_m = MIN_OFFER_VALUE_USD // 1_000_000
+    header = f"Daily U.S. IPO Alert\nDate: {today}\n"
+    header += f"Criteria: U.S. exchanges, offer size > ${min_m}M\n"
+    header += "-" * 40
+
+    if tickers:
+        body = f"{header}\n\nQualifying tickers today:\n\n"
+        body += "\n".join(f"  • {t}" for t in tickers)
+    else:
+        body = f"{header}\n\nNo qualifying IPOs today."
+
+    return body
+
+
+def send_email(tickers, today):
+    """Send email if there are qualifying tickers, or when SEND_WHEN_EMPTY is enabled."""
+    if not tickers and not SEND_WHEN_EMPTY:
         print("No qualifying IPOs today - no email sent.")
-        return  # Exit without sending
-    
-    body = f"Qualifying IPO tickers (> $200M offer amount) on U.S. markets today: {', '.join(tickers)}"
-    
+        return
+
+    body = _build_email_body(tickers, today)
+    subject = "Daily U.S. IPO Alert - Qualifying Tickers" if tickers else "Daily U.S. IPO Alert - No Qualifying IPOs Today"
+
     msg = MIMEText(body)
-    msg['Subject'] = 'Daily U.S. IPO Alert - Qualifying Tickers'
-    msg['From'] = EMAIL_SENDER
-    msg['To'] = EMAIL_RECIPIENT
+    msg["Subject"] = subject
+    msg["From"] = EMAIL_SENDER
+    msg["To"] = EMAIL_RECIPIENT
 
     try:
         server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
@@ -65,12 +90,29 @@ def send_email(tickers):
         server.quit()
         print("Email sent successfully!")
     except Exception as e:
-        print(f"Email sending failed: {str(e)}")
+        print(f"Email sending failed: {e}")
 
-# Main execution (run this script daily at 9 AM Dubai time)
+
+def _check_config():
+    """Warn if required credentials are missing."""
+    missing = []
+    if not API_KEY:
+        missing.append("FINNHUB_API_KEY")
+    if not EMAIL_SENDER:
+        missing.append("EMAIL_SENDER")
+    if not EMAIL_PASSWORD:
+        missing.append("EMAIL_PASSWORD")
+    if not EMAIL_RECIPIENT:
+        missing.append("EMAIL_RECIPIENT")
+    if missing:
+        print("Missing config! Copy .env.example to .env and set:", ", ".join(missing))
+        raise SystemExit(1)
+
+
 if __name__ == "__main__":
+    _check_config()
     today = get_today_dubai()
     print(f"Running for date: {today}")
     ipos = fetch_ipos(today)
-    qualifying_tickers = filter_qualifying_ipos(ipos)
-    send_email(qualifying_tickers)
+    tickers = filter_qualifying_ipos(ipos)
+    send_email(tickers, today)
