@@ -110,6 +110,7 @@ Ipo_alert/
 ├── requirements.txt
 ├── README.md          # Setup guide
 ├── PROJECT_STORY.md   # Cost comparison & screenshots
+├── WORKFLOW.md        # Detailed workflow
 └── assets/            # Screenshots for docs
 ```
 
